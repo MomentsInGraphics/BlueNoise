@@ -35,7 +35,8 @@ def FindLargestVoid(BinaryPattern,StandardDeviation):
       \param BinaryPattern A boolean array (should be two-dimensional although the 
              implementation works in arbitrary dimensions).
       \param StandardDeviation The standard deviation used for the Gaussian filter 
-             in pixels.
+             in pixels. This can be a single float for an isotropic Gaussian or a 
+             tuple with one float per dimension for an anisotropic Gaussian.
       \return A flat index i such that BinaryPattern.flat[i] corresponds to the 
               largest void. By definition this is a majority pixel.
       \sa GetVoidAndClusterBlueNoise"""
@@ -45,7 +46,7 @@ def FindLargestVoid(BinaryPattern,StandardDeviation):
     # Apply the Gaussian. We do not want to cut off the Gaussian at all because even 
     # the tiniest difference can change the ranking. Therefore we apply the Gaussian 
     # through a fast Fourier transform by means of the convolution theorem.
-    FilteredArray=np.fft.ifft2(ndimage.fourier_gaussian(np.fft.fft2(np.where(BinaryPattern,1.0,0.0)),StandardDeviation)).real;
+    FilteredArray=np.fft.ifftn(ndimage.fourier.fourier_gaussian(np.fft.fftn(np.where(BinaryPattern,1.0,0.0)),StandardDeviation)).real;
     # Find the largest void
     return np.argmin(np.where(BinaryPattern,2.0,FilteredArray));
 
@@ -56,7 +57,7 @@ def FindTightestCluster(BinaryPattern,StandardDeviation):
       \sa GetVoidAndClusterBlueNoise"""
     if(np.count_nonzero(BinaryPattern)*2>=np.size(BinaryPattern)):
         BinaryPattern=np.logical_not(BinaryPattern);
-    FilteredArray=np.fft.ifft2(ndimage.fourier_gaussian(np.fft.fft2(np.where(BinaryPattern,1.0,0.0)),StandardDeviation)).real;
+    FilteredArray=np.fft.ifftn(ndimage.fourier.fourier_gaussian(np.fft.fftn(np.where(BinaryPattern,1.0,0.0)),StandardDeviation)).real;
     return np.argmax(np.where(BinaryPattern,FilteredArray,-1.0));
 
 
@@ -72,7 +73,9 @@ def GetVoidAndClusterBlueNoise(OutputShape,StandardDeviation=1.5,InitialSeedFrac
              Gaussian filter defining largest voids and tightest clusters. Larger 
              values lead to more low-frequency content but better isotropy. Small 
              values lead to more ordered patterns with less low-frequency content.
-             Ulichney proposes to use a value of 1.5.
+             Ulichney proposes to use a value of 1.5. If you want an anisotropic 
+             Gaussian, you can pass a tuple of length len(OutputShape) with one 
+             standard deviation per dimension.
       \param InitialSeedFraction The only non-deterministic step in the algorithm 
              marks a small number of pixels in the grid randomly. This parameter 
              defines the fraction of such points. It has to be positive but less 
