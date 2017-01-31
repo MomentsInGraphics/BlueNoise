@@ -15,6 +15,8 @@ import numpy as np
 from scipy import ndimage
 from matplotlib import pyplot
 import png
+import threading
+import struct
 
 def GetBayerPattern(Log2Width):
     """Creates a two-dimensional Bayer pattern with a width and height of 
@@ -200,7 +202,7 @@ def PlotBinaryPatterns(Texture,nPatternRow,nPatternColumn):
     return Figure;
 
 
-def StoreNoiseTextureLDR(Texture,OutputPNGFilePath):
+def StoreNoiseTextureLDR(Texture,OutputPNGFilePath,nRank=-1):
     """This function stores the given texture to a standard low-dynamic range png 
        file with four channels and 8 bits per channel.
       \param Texture An array of shape (Height,Width) or (Height,Width,nChannel). 
@@ -208,13 +210,15 @@ def StoreNoiseTextureLDR(Texture,OutputPNGFilePath):
              superfluous channels are ignored. If nChannel<4 the data is expanded. 
              The alpha channel is set to 255, green and blue are filled with black 
              or with duplicates of red if nChannel==1. It is assumed that each 
-             channel contains every integer value from 0 to Width*Height-1 exactly 
-             once. The range of values is remapped linearly to span the range from 0 
-             to 255.
+             channel contains every integer value from 0 to nRank-1 exactly once. 
+             The range of values is remapped linearly to span the range from 0 to 
+             255.
       \param OutputPNGFilePath The path to the output png file including the file 
-             format extension."""
+             format extension.
+      \param nRank Defaults to Width*Height if you pass a non-positive value."""
     # Scale the array to an LDR version
-    nRank=Texture.shape[0]*Texture.shape[1];
+    if(nRank<=0):
+        nRank=Texture.shape[0]*Texture.shape[1];
     Texture=np.asarray((Texture*256)//nRank,dtype=np.uint8);
     # Get a three-dimensional array
     if(len(Texture.shape)<3):
@@ -232,19 +236,20 @@ def StoreNoiseTextureLDR(Texture,OutputPNGFilePath):
     png.from_array(Texture,"RGBA;8").save(OutputPNGFilePath);
 
 
-def StoreNoiseTextureHDR(Texture,OutputPNGFilePath):
+def StoreNoiseTextureHDR(Texture,OutputPNGFilePath,nRank=-1):
     """This function stores the given texture to an HDR png file with 16 bits per 
        channel and the specified number of channels.
       \param Texture An array of shape (Height,Width) or (Height,Width,nChannel). 
              The former is handled like (Height,Width,1). It is assumed that each 
-             channel contains each integer value from 0 to Width*Height-1 exactly 
-             once. The range of values is remapped linearly to span the range from 
-             0 to 65535 supported by the output format. nChannel can be 1, 2, 3 or 
-             4.
-      \param OutputPNGFilePath The path to the output png file including the file 
-             format extension."""
+             channel contains each integer value from 0 to nRank-1 exactly once. The 
+             range of values is remapped linearly to span the range from 0 to 
+             2**16-1 supported by the output format. nChannel can be 1, 2, 3 or 4.
+      \param OutputPNGFilePath The path to the output *.png file including the file 
+             format extension.
+      \param nRank Defaults to Width*Height if you pass a non-positive value."""
     # Scale the array to an HDR version
-    nRank=Texture.shape[0]*Texture.shape[1];
+    if(nRank<=0):
+        nRank=Texture.shape[0]*Texture.shape[1];
     Texture=np.asarray((np.asarray(Texture,dtype=np.uint64)*(2**16))//nRank,dtype=np.uint16);
     # Get a three-dimensional array
     if(len(Texture.shape)<3):
@@ -252,6 +257,57 @@ def StoreNoiseTextureHDR(Texture,OutputPNGFilePath):
     # Save the image
     Mode=["L","LA","RGB","RGBA"][Texture.shape[2]-1]+";16";
     png.from_array(Texture,Mode).save(OutputPNGFilePath);
+
+
+def StoreNDTextureHDR(Array,OutputFilePath):
+    """This function stores the given unsigned integer array in a minimalist binary 
+       file format. The last dimension is interpreted as corresponding to the 
+       channels of the image. The file format consists of a sequence of unsigned, 
+       least significant bit first 32-bit integers. The contained data is described 
+       below:
+      - Version: File format version, should be 1.
+      - nChannel: The number of color channels in the image. This should be a value 
+        between 1 (greyscale) and 4 (RGBA).
+      - nDimension: The number of dimensions of the stored array, i.e. the number of 
+        indices required to uniquely identify one pixel, voxel, etc..
+      - Shape[nDimension]: nDimension integers providing the size of the array along 
+        each dimension. By convention the first dimension is height, second width 
+        and third depth.
+      - Data[Shape[0]*...*Shape[nDimension-1]*nChannel]: The uncompressed data of 
+        the array. The channels are unrolled first, followed by all dimensions in 
+        reverse order. Thus, an RG image of size 3*2 would be stored in the 
+        following order: 00R, 00G, 01R, 01G, 10R, 10G, 11R, 11G, 20R, 20G, 21R, 
+        21G"""
+    # Prepare all the meta data and the data itself
+    Array=np.asarray(Array,dtype=np.uint32);
+    Version=1;
+    nDimension=len(Array.shape)-1;
+    nChannel=Array.shape[nDimension];
+    Shape=Array.shape[0:nDimension];
+    Data=Array.flatten("C");
+    # Write it to the file
+    OutputFile=open(OutputFilePath,"wb");
+    OutputFile.write(struct.pack("LLL",Version,nChannel,nDimension));
+    OutputFile.write(struct.pack("L"*nDimension,*Shape));
+    OutputFile.write(struct.pack("L"*np.size(Data),*Data));
+    OutputFile.close();
+
+
+def LoadNDTextureHDR(SourceFilePath):
+    """Loads a file generated by StoreNDTextureHDR() and returns it as an array like 
+       the one that goes into StoreNDTextureHDR() using data type np.uint32. On 
+       failure it returns None."""
+    # Load the meta data
+    File=open(SourceFilePath,"rb");
+    Version,nChannel,nDimension=struct.unpack_from("LLL",File.read(12));
+    if(Version!=1):
+        return None;
+    Shape=struct.unpack_from("L"*nDimension,File.read(4*nDimension));
+    nScalar=np.prod(Shape)*nChannel;
+    Data=struct.unpack_from("L"*nScalar,File.read(4*nScalar));
+    File.close();
+    # Prepare the output
+    return np.asarray(Data,dtype=np.uint32).reshape(tuple(list(Shape)+[nChannel]),order="C");
 
 
 def GenerateBlueNoiseDatabase(RandomSeedIndexList=range(1),MinResolution=16,MaxResolution=1024,ChannelCountList=[1,2,3,4],StandardDeviation=1.5):
@@ -270,13 +326,63 @@ def GenerateBlueNoiseDatabase(RandomSeedIndexList=range(1),MinResolution=16,MaxR
             makedirs(OutputDirectory);
         for nChannel in ChannelCountList:
             for i in RandomSeedIndexList:
-                Texture=np.dstack([GetVoidAndClusterBlueNoise((Resolution,Resolution),StandardDeviation) for i in range(nChannel)]);
+                Texture=np.dstack([GetVoidAndClusterBlueNoise((Resolution,Resolution),StandardDeviation) for j in range(nChannel)]);
                 LDRFormat=["LLL1","RG01","RGB1","RGBA"][nChannel-1];
                 HDRFormat=["L","LA","RGB","RGBA"][nChannel-1];
                 StoreNoiseTextureLDR(Texture,path.join(OutputDirectory,"LDR_%s_%d.png"%(LDRFormat,i)));
                 StoreNoiseTextureHDR(Texture,path.join(OutputDirectory,"HDR_%s_%d.png"%(HDRFormat,i)));
                 print("%d*%d, %s, %d"%(Resolution,Resolution,LDRFormat,i));
         Resolution*=2;
+
+
+def Generate3DBlueNoiseTexture(Width,Height,Depth,nChannel,StandardDeviation=1.5):
+    """This function generates a single 3D blue noise texture with the specified 
+       dimensions and number of channels. It then outputs it to a sequence of Depth 
+       output files in LDR and HDR in a well-organized tree of directories. It also 
+       outputs raw binary files.
+      \sa StoreNDTextureHDR() """
+    OutputDirectory="../Data/%d_%d_%d"%(Width,Height,Depth);
+    if(not path.exists(OutputDirectory)):
+        makedirs(OutputDirectory);
+    # Generate the blue noise for the various channels using multi-threading
+    ChannelTextureList=[None]*nChannel;
+    ChannelThreadList=[None]*nChannel;
+    def GenerateAndStoreTexture(Index):
+        ChannelTextureList[Index]=GetVoidAndClusterBlueNoise((Height,Width,Depth),StandardDeviation);
+    for i in range(nChannel):
+        ChannelThreadList[i]=threading.Thread(target=GenerateAndStoreTexture,args=(i,));
+        ChannelThreadList[i].start();
+    for Thread in ChannelThreadList:
+        Thread.join();
+    Texture=np.concatenate([ChannelTextureList[i][:,:,:,np.newaxis] for i in range(nChannel)],3);
+    LDRFormat=["LLL1","RG01","RGB1","RGBA"][nChannel-1];
+    HDRFormat=["L","LA","RGB","RGBA"][nChannel-1];
+    StoreNDTextureHDR(Texture,path.join(OutputDirectory,"HDR_"+HDRFormat+".raw"));
+    for i in range(Depth):
+        StoreNoiseTextureLDR(Texture[:,:,i,:],path.join(OutputDirectory,"LDR_%s_%d.png"%(LDRFormat,i)),Height*Width*Depth);
+        StoreNoiseTextureHDR(Texture[:,:,i,:],path.join(OutputDirectory,"HDR_%s_%d.png"%(HDRFormat,i)),Height*Width*Depth);
+
+
+def GenerateNDBlueNoiseTexture(Shape,nChannel,OutputFilePath,StandardDeviation=1.5):
+    """This function generates a single n-dimensional blue noise texture with the 
+       specified shape and number of channels. It then outputs it to the specified 
+       raw binary file.
+      \sa StoreNDTextureHDR() """
+    OutputDirectory=path.split(OutputFilePath)[0];
+    if(not path.exists(OutputDirectory)):
+        makedirs(OutputDirectory);
+    # Generate the blue noise for the various channels using multi-threading
+    ChannelTextureList=[None]*nChannel;
+    ChannelThreadList=[None]*nChannel;
+    def GenerateAndStoreTexture(Index):
+        ChannelTextureList[Index]=GetVoidAndClusterBlueNoise(Shape,StandardDeviation);
+    for i in range(nChannel):
+        ChannelThreadList[i]=threading.Thread(target=GenerateAndStoreTexture,args=(i,));
+        ChannelThreadList[i].start();
+    for Thread in ChannelThreadList:
+        Thread.join();
+    Texture=np.concatenate([ChannelTextureList[i][...,np.newaxis] for i in range(nChannel)],len(Shape));
+    StoreNDTextureHDR(Texture,OutputFilePath);
 
 
 def UniformToTriangularDistribution(UniformTexture):
@@ -298,7 +404,15 @@ if(__name__=="__main__"):
     #GenerateBlueNoiseDatabase(range(8),256,256,range(1,5),1.9);
     #GenerateBlueNoiseDatabase(range(1),512,512,range(1,5),1.9);
     #GenerateBlueNoiseDatabase(range(1),1024,1024,[4],1.9);
+    #for nChannel in range(1,5):
+        #Generate3DBlueNoiseTexture(16,16,16,nChannel,1.9);
+        #Generate3DBlueNoiseTexture(32,32,32,nChannel,1.9);
+        #Generate3DBlueNoiseTexture(64,64,64,nChannel,1.9);
+        #ChannelNames=["","L","LA","RGB","RGBA"][nChannel];
+        #GenerateNDBlueNoiseTexture((8,8,8,8),nChannel,"../Data/8_8_8_8/HDR_"+ChannelNames+".raw",1.9);
+        #GenerateNDBlueNoiseTexture((16,16,16,16),nChannel,"../Data/16_16_16_16/HDR_"+ChannelNames+".raw",1.9);
     Texture=GetVoidAndClusterBlueNoise((64,64),1.9);
+    #Texture=GetVoidAndClusterBlueNoise((32,32,32),1.9)[:,:,0];
     AnalyzeNoiseTexture(Texture,True);
     PlotBinaryPatterns(Texture,3,5);
     pyplot.show();
