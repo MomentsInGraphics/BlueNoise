@@ -232,6 +232,8 @@ def StoreNoiseTextureLDR(Texture,OutputPNGFilePath,nRank=-1):
         Texture=np.dstack([Texture[:,:,0],Texture[:,:,1],Texture[:,:,2]]+[255*np.ones_like(Texture[:,:,0])]);
     elif(Texture.shape[2]>4):
         Texture=Texture[:,:,:4];
+    # Ravel width and channel count to meet pypng requirements
+    Texture=Texture.reshape((Texture.shape[0],-1))
     # Save the image
     png.from_array(Texture,"RGBA;8").save(OutputPNGFilePath);
 
@@ -256,6 +258,7 @@ def StoreNoiseTextureHDR(Texture,OutputPNGFilePath,nRank=-1):
         Texture=Texture[:,:,np.newaxis];
     # Save the image
     Mode=["L","LA","RGB","RGBA"][Texture.shape[2]-1]+";16";
+    Texture=Texture.reshape((Texture.shape[0],-1))
     png.from_array(Texture,Mode).save(OutputPNGFilePath);
 
 
